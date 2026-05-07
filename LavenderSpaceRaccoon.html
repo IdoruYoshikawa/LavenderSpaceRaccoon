@@ -756,6 +756,14 @@
                 }
                 // Penalty
                 game.isk = Math.max(0, game.isk - 10);
+                // Move Bob away so he doesn't instantly re-catch
+                for (const c of game.crew) {
+                    c.x = 17; c.y = 2; // send back to start of patrol
+                    c.state = 'patrol';
+                    c.investigating = null;
+                    c.mopping = 0;
+                    c.rantTimer = 0;
+                }
             } else {
                 log("📋 INCORRECT. New form generated. *sigh*");
                 showFormPuzzle();
