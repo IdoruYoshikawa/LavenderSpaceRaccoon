@@ -1,0 +1,1267 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <title>🦝 Space Raccoon V3: Lavender's Heist</title>
+    <style>
+        body {
+            margin: 0;
+            background: #0a0a1a;
+            color: #e0e0ff;
+            font-family: 'Courier New', monospace;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            min-height: 100vh;
+            padding: 10px;
+        }
+
+        h1 {
+            margin: 5px;
+            color: #b48cff;
+            text-shadow: 2px 2px #000;
+        }
+
+        #game {
+            border: 4px solid #b48cff;
+            image-rendering: pixelated;
+            background: #1a1a2e;
+        }
+
+        #hud {
+            width: 640px;
+            background: #1a1a2e;
+            border: 2px solid #b48cff;
+            padding: 8px;
+            margin-top: 5px;
+            font-size: 13px;
+        }
+
+        #ticker {
+            width: 640px;
+            background: #000;
+            color: #0f0;
+            border: 2px solid #0f0;
+            padding: 4px;
+            overflow: hidden;
+            white-space: nowrap;
+            margin-top: 5px;
+            font-size: 12px;
+        }
+
+        #ticker span {
+            display: inline-block;
+            padding-left: 100%;
+            animation: scroll 30s linear infinite;
+        }
+
+        @keyframes scroll {
+            to {
+                transform: translateX(-100%);
+            }
+        }
+
+        #log {
+            width: 640px;
+            background: #1a1a2e;
+            border: 2px solid #555;
+            padding: 6px;
+            height: 80px;
+            overflow-y: auto;
+            margin-top: 5px;
+            font-size: 12px;
+        }
+
+        .controls {
+            font-size: 11px;
+            color: #888;
+            margin-top: 5px;
+        }
+
+        #overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.85);
+            display: none;
+            justify-content: center;
+            align-items: center;
+            z-index: 10;
+        }
+
+        #overlay-content {
+            background: #1a1a2e;
+            border: 3px solid #b48cff;
+            padding: 20px;
+            max-width: 500px;
+            text-align: center;
+        }
+
+        button {
+            background: #b48cff;
+            border: none;
+            padding: 8px 16px;
+            margin: 4px;
+            cursor: pointer;
+            font-family: inherit;
+            color: #000;
+            font-weight: bold;
+        }
+
+        button:hover {
+            background: #d4b4ff;
+        }
+    </style>
+</head>
+
+<body>
+    <h1>🦝 SPACE RACCOON V3: Lavender's Heist 🚀</h1>
+    <canvas id="game" width="640" height="480"></canvas>
+    <div id="hud">
+        <span id="hud-isk">💰 ISK: 0/100</span> |
+        <span id="hud-parts">🔧 Parts: 0/3</span> |
+        <span id="hud-fruit">🍊 Fruit: 0</span> |
+        <span id="hud-drunk">😎 Sober</span> |
+        <span id="hud-hooch-count">🍺 Drinks: 0/4</span> |
+        <span id="hud-kits">🦝 Kits: 0/3 at Pod</span>
+    </div>
+    <div id="ticker"><span id="ticker-text">ISK MARKET: Loading galactic nonsense...</span></div>
+    <div id="log"></div>
+    <div class="controls">WASD/Arrows: Move | E: Steal/Interact/Pickup Kit | Q: Drop fruit (ferment) | F: Drink hooch |
+        Goal: 100 ISK + 3 parts + 4 drinks + carry all 3 kits to the ESCAPE POD</div>
+
+    <div id="overlay">
+        <div id="overlay-content"></div>
+    </div>
+
+    <script>
+        //============================================================
+        // 🦝 SPACE RACCOON - v3 (Raccoonling Rescue + Hooch Journey)
+        //============================================================
+        const canvas = document.getElementById('game');
+        const ctx = canvas.getContext('2d');
+        ctx.imageSmoothingEnabled = false;
+
+        const TILE = 32;
+        const COLS = 20;
+        const ROWS = 15;
+
+        // ---------- MAP ----------
+        // 0=floor, 1=wall, 2=den, 3=escape pod, 4=fermentation corner
+        const MAP = [
+            "11111111111111111111",
+            "10000000000000000031",
+            "10000111100000111101",
+            "10000100000000000001",
+            "10000100001111000001",
+            "10000000001000000001",
+            "11110000001000011111",
+            "10000000000000000001",
+            "10000011110000000001",
+            "10000010000000111101",
+            "10000010000000100001",
+            "10220010000000100001",
+            "12220000000000000041",
+            "10000000000000000001",
+            "11111111111111111111",
+        ];
+
+        function tileAt(x, y) {
+            if (x < 0 || y < 0 || x >= COLS || y >= ROWS) return '1';
+            return MAP[y][x];
+        }
+        function isWall(x, y) { return tileAt(x, y) === '1'; }
+        function isDen(x, y) { return tileAt(x, y) === '2'; }
+        function isEscape(x, y) { return tileAt(x, y) === '3'; }
+        function isFerment(x, y) { return tileAt(x, y) === '4'; }
+
+        // ---------- GAME STATE ----------
+        const game = {
+            player: { x: 11, y: 12, dir: 0, drunk: 0, caught: false, carriedKit: null },
+            drunkCount: 0,
+            kitsAtPod: 0,
+            isk: 0,
+            parts: 0,
+            fruit: 0,
+            fermenting: 0, // fruit dropped at corner
+            fermentTimer: 0,
+            hooch: 0,
+            items: [],
+            crew: [],
+            cat: null,
+            raccoonlings: [],
+            notes: [],
+            iskTrend: 0,
+            trash: 0,
+            tickerMessages: [
+                "ISK ↓ 47% — analysts blame 'unusual rodent activity'",
+                "Janitor Bob promoted to Acting Chief of Security. Nobody told him.",
+                "Engineer Klaus reports cosmic gremlin sighting near vent C-7",
+                "Reminder: bananas are not sentient. Stop apologizing.",
+                "The vending machine is haunted again.",
+                "Greg has been spotted near Bob's mop closet. Greg always is.",
+                "ISK ↑ 12% — Chonk ate something",
+                "Dr. Petunia has increased her own medication. Again.",
+                "Janitor Bob has filed 147 forms this week. Nobody reads them.",
+                "Janitor Bob: 'I know what I saw. I just can't legally describe it.'",
+                "ALERT: Janitor Bob's mop has been reclassified as a weapon.",
+                "Bob's suspicion level has exceeded station safety thresholds.",
+                "Janitor Bob requests hazard pay for 'emotional fur damage'.",
+            ],
+            paused: false,
+            won: false,
+        };
+
+        // ---------- INIT ITEMS ----------
+        function spawnItems() {
+            const positions = [
+                // ISK wallets - more of them, better values
+                { x: 3, y: 3, t: 'isk' }, { x: 14, y: 2, t: 'isk' }, { x: 8, y: 5, t: 'isk' },
+                { x: 16, y: 8, t: 'isk' }, { x: 5, y: 10, t: 'isk' }, { x: 13, y: 11, t: 'isk' },
+                { x: 18, y: 1, t: 'isk' }, { x: 1, y: 13, t: 'isk' }, { x: 9, y: 13, t: 'isk' },
+                { x: 17, y: 13, t: 'isk' }, { x: 1, y: 1, t: 'isk' }, { x: 11, y: 7, t: 'isk' },
+                // Fruit - plenty
+                { x: 2, y: 7, t: 'orange' }, { x: 11, y: 3, t: 'orange' }, { x: 17, y: 4, t: 'grape' },
+                { x: 7, y: 13, t: 'grape' }, { x: 15, y: 13, t: 'orange' }, { x: 9, y: 7, t: 'grape' },
+                { x: 6, y: 8, t: 'orange' }, { x: 13, y: 5, t: 'grape' }, { x: 3, y: 13, t: 'orange' },
+                // Parts - exactly enough + 1 spare
+                { x: 4, y: 5, t: 'part' }, { x: 12, y: 9, t: 'part' }, { x: 17, y: 11, t: 'part' },
+                { x: 6, y: 2, t: 'part' },
+            ];
+            game.items = positions.filter(p => !isWall(p.x, p.y) && !isDen(p.x, p.y) && !isFerment(p.x, p.y) && !isEscape(p.x, p.y)).map(p => ({ ...p, taken: false, respawnTimer: 0 }));
+        }
+
+        function spawnCrew() {
+            game.crew = [{
+                name: 'Janitor Bob',
+                type: 'janitor',
+                x: 17, y: 2, dir: 1, timer: 0,
+                path: [{ x: 17, y: 2 }, { x: 17, y: 7 }, { x: 11, y: 7 }, { x: 11, y: 2 }, { x: 1, y: 2 }, { x: 1, y: 13 }, { x: 9, y: 13 }, { x: 17, y: 13 }],
+                pi: 0,
+                visionRange: 4,
+                baseVisionRange: 4,
+                investigating: null,
+                mopping: 0,
+                suspicion: 0,
+                // V2 dynamic janitor additions
+                state: 'patrol', // patrol, investigate, chase, mop, rant
+                mood: 'calm',    // calm, annoyed, furious
+                moodTimer: 0,
+                chaseSpeed: 20,
+                rantTimer: 0,
+                rantLines: [
+                    '"I didn\'t sign up for SPACE vermin!"',
+                    '"My mop... it YEARNS for justice."',
+                    '"Form 14-C. Form 27-B/6. FORM 99-OMEGA."',
+                    '"I have a VERY particular set of cleaning skills."',
+                    '"You think you\'re clever? I\'VE MOPPED GALAXIES."',
+                    '"When I catch you, there will be PAPERWORK."',
+                ],
+                trashPiles: [],  // dropped trash that slows player
+                lastPlayerPos: null,
+                patrolSpeedMod: 0,
+            }];
+            game.cat = null; // RIP The Cat
+        }
+
+        function spawnRaccoonlings() {
+            game.raccoonlings = [
+                { name: 'Chonk', x: 2, y: 11, color: '#a86', home: true, t: 0, ate: 0 },
+                { name: 'Greg', x: 3, y: 11, color: '#999', home: true, t: 0 },
+                { name: 'The Quiet One', x: 2, y: 12, color: '#444', home: true, t: 0 },
+            ];
+        }
+
+        // ---------- INPUT ----------
+        const keys = {};
+        document.addEventListener('keydown', e => {
+            keys[e.key.toLowerCase()] = true;
+            if (game.paused) return;
+            if (e.key.toLowerCase() === 'e') tryInteract();
+            if (e.key.toLowerCase() === 'q') tryDropFruit();
+            if (e.key.toLowerCase() === 'f') tryDrink();
+        });
+        document.addEventListener('keyup', e => { keys[e.key.toLowerCase()] = false; });
+
+        // ---------- MOVEMENT ----------
+        let moveCooldown = 0;
+        function updatePlayer() {
+            if (moveCooldown > 0) { moveCooldown--; return; }
+            let dx = 0, dy = 0;
+            if (keys['w'] || keys['arrowup']) dy = -1;
+            else if (keys['s'] || keys['arrowdown']) dy = 1;
+            else if (keys['a'] || keys['arrowleft']) dx = -1;
+            else if (keys['d'] || keys['arrowright']) dx = 1;
+
+            if (dx === 0 && dy === 0) return;
+
+            // Drunk inverted
+            if (game.player.drunk > 60) { dx = -dx; dy = -dy; }
+
+            const nx = game.player.x + dx;
+            const ny = game.player.y + dy;
+            if (!isWall(nx, ny)) {
+                game.player.x = nx;
+                game.player.y = ny;
+                game.player.dir = dx < 0 ? 2 : dx > 0 ? 3 : dy < 0 ? 0 : 1;
+            }
+            moveCooldown = game.player.drunk > 0 ? 4 : 6;
+        }
+
+        // ---------- INTERACTION ----------
+        function tryInteract() {
+            // Drop part at den
+            if (game.player.carrying === 'part' && isDen(game.player.x, game.player.y)) {
+                game.parts++;
+                game.player.carrying = null;
+                log(`🛠️ Bolted a part to your horrifying ship. (${game.parts}/3)`);
+                if (game.parts >= 3) log(`🚀 Ship is "complete." Now gather hooch, kits, ISK, and reach the POD!`);
+                return;
+            }
+            // Deliver raccoonling to escape pod
+            if (game.player.carriedKit && isEscape(game.player.x, game.player.y)) {
+                const kit = game.player.carriedKit;
+                kit.rescued = true;
+                kit.carried = false;
+                kit.x = -10; kit.y = -10;
+                game.player.carriedKit = null;
+                game.kitsAtPod++;
+                log(`🚀 ${kit.name} is loaded into the pod! (${game.kitsAtPod}/3 kits aboard)`);
+                if (game.kitsAtPod >= 3) log(`🦝 All kits aboard! Now make sure you have ISK, parts, and drinks!`);
+                return;
+            }
+            // Try escape
+            if (isEscape(game.player.x, game.player.y)) {
+                const missing = [];
+                if (game.isk < 100) missing.push(`ISK ${game.isk}/100`);
+                if (game.parts < 3) missing.push(`Parts ${game.parts}/3`);
+                if (game.drunkCount < 4) missing.push(`Drinks ${game.drunkCount}/4`);
+                if (game.kitsAtPod < 3) missing.push(`Kits ${game.kitsAtPod}/3`);
+                if (missing.length === 0) {
+                    winGame();
+                    return;
+                } else {
+                    log(`🚪 Escape pod locked. Still need: ${missing.join(', ')}`);
+                    return;
+                }
+            }
+            // Pick up raccoonling
+            if (!game.player.carriedKit && !game.player.carrying) {
+                for (const k of game.raccoonlings) {
+                    if (!k.rescued && !k.captured && k.x === game.player.x && k.y === game.player.y) {
+                        game.player.carriedKit = k;
+                        k.carried = true;
+                        log(`🦝 Picked up ${k.name}! Carry them to the ESCAPE POD (red tile).`);
+                        return;
+                    }
+                }
+            }
+            // Pick up items
+            for (const it of game.items) {
+                if (!it.taken && it.x === game.player.x && it.y === game.player.y) {
+                    it.taken = true;
+                    if (it.t === 'isk') {
+                        const amt = 18 + Math.floor(Math.random() * 15);
+                        game.isk += amt;
+                        log(`💰 Hacked an electronic wallet! +${amt} ISK (Total: ${game.isk})`);
+                        game.iskTrend += amt;
+                        it.respawnTimer = 600;
+                    } else if (it.t === 'orange' || it.t === 'grape') {
+                        game.fruit++;
+                        log(`🍊 Stole a ${it.t}! (Fruit: ${game.fruit}) Take to purple bubbly tile.`);
+                        it.respawnTimer = 480;
+                    } else if (it.t === 'part') {
+                        if (game.player.carrying || game.player.carriedKit) {
+                            log("🔧 Hands full! Drop off what you're carrying first.");
+                            it.taken = false;
+                            return;
+                        }
+                        game.player.carrying = 'part';
+                        log(`🔧 Grabbed a ship part! Drag it to the DEN (brown tile).`);
+                    }
+                    return;
+                }
+            }
+            log("Nothing here to interact with.");
+        }
+
+        function tryDropFruit() {
+            if (game.fruit <= 0) { log("No fruit to drop. Steal some first."); return; }
+            if (isFerment(game.player.x, game.player.y)) {
+                game.fermenting += game.fruit;
+                log(`🍷 Dropped ${game.fruit} fruit into the corner. Total fermenting: ${game.fermenting}. *bubbles*`);
+                game.fruit = 0;
+                // Reset/extend timer so newly dropped fruit also ferments
+                game.fermentTimer = 300;
+            } else {
+                log("⚠️ Stand on the FERMENTATION CORNER (purple bubbly tile, bottom-right) to ferment.");
+            }
+        }
+
+        function tryDrink() {
+            if (game.hooch <= 0) { log("No Space Hooch available."); return; }
+            game.hooch--;
+            game.player.drunk = 240;
+            game.drunkCount++;
+            const msgs = [
+                `🥴 *glug glug* SLOSHED! (Drink ${game.drunkCount}/4 for the journey)`,
+                `🥴 *burp* That's ${game.drunkCount}/4 drinks. Liquid courage!`,
+                `🥴 The room spins. ${game.drunkCount}/4 drinks down.`,
+                `🥴 *hic* ${game.drunkCount}/4. You feel... brave? Nauseous? Both.`,
+            ];
+            log(msgs[Math.min(game.drunkCount - 1, msgs.length - 1)]);
+            if (game.drunkCount >= 4) log(`🍺 You've had enough liquid courage for the journey!`);
+        }
+
+        // ---------- CREW AI (V2 - Dynamic Janitor) ----------
+        function moveCrewToward(c, tx, ty) {
+            const dx = Math.sign(tx - c.x);
+            const dy = Math.sign(ty - c.y);
+            if (dx !== 0 && !isWall(c.x + dx, c.y)) {
+                c.x += dx; c.dir = dx < 0 ? 2 : 3; return true;
+            } else if (dy !== 0 && !isWall(c.x, c.y + dy)) {
+                c.y += dy; c.dir = dy < 0 ? 0 : 1; return true;
+            } else if (dy !== 0 && !isWall(c.x + (Math.random() < 0.5 ? 1 : -1), c.y)) {
+                const sidestep = Math.random() < 0.5 ? 1 : -1;
+                if (!isWall(c.x + sidestep, c.y)) { c.x += sidestep; return true; }
+            } else if (dx !== 0 && !isWall(c.x, c.y + (Math.random() < 0.5 ? 1 : -1))) {
+                const sidestep = Math.random() < 0.5 ? 1 : -1;
+                if (!isWall(c.x, c.y + sidestep)) { c.y += sidestep; return true; }
+            }
+            return false;
+        }
+
+        function updateJanitorMood(c) {
+            if (c.suspicion >= 6 && c.mood !== 'furious') {
+                c.mood = 'furious';
+                c.visionRange = c.baseVisionRange + 3;
+                c.chaseSpeed = 10;
+                log(`🔥 Janitor Bob is FURIOUS! His mop GLOWS with righteous anger!`);
+            } else if (c.suspicion >= 3 && c.mood === 'calm') {
+                c.mood = 'annoyed';
+                c.visionRange = c.baseVisionRange + 1;
+                c.chaseSpeed = 15;
+                log(`😤 Janitor Bob is getting annoyed. He mops HARDER.`);
+            }
+            // Cool down mood over time
+            if (c.moodTimer > 0) {
+                c.moodTimer--;
+            } else if (c.suspicion > 0 && c.state === 'patrol') {
+                c.moodTimer = 300;
+                c.suspicion = Math.max(0, c.suspicion - 1);
+                if (c.suspicion < 3) {
+                    c.mood = 'calm';
+                    c.visionRange = c.baseVisionRange;
+                    c.chaseSpeed = 20;
+                }
+            }
+        }
+
+        function updateCrew() {
+            for (const c of game.crew) {
+                c.timer++;
+                updateJanitorMood(c);
+
+                // Trash pile logic — drop trash occasionally while patrolling
+                if (c.state === 'patrol' && c.timer % 600 === 0 && c.trashPiles.length < 5) {
+                    c.trashPiles.push({ x: c.x, y: c.y, life: 900 });
+                    log(`🗑️ Janitor Bob left a wet-floor zone. Watch your step!`);
+                }
+                // Decay trash piles
+                c.trashPiles = c.trashPiles.filter(tp => { tp.life--; return tp.life > 0; });
+                // Player steps on trash → slow
+                for (const tp of c.trashPiles) {
+                    if (tp.x === game.player.x && tp.y === game.player.y) {
+                        moveCooldown = Math.max(moveCooldown, 12);
+                    }
+                }
+
+                // === STATE MACHINE ===
+                if (c.state === 'mop') {
+                    c.mopping--;
+                    if (c.mopping <= 0) {
+                        c.state = 'patrol';
+                    }
+                    checkJanitorVision(c);
+                    continue;
+                }
+
+                if (c.state === 'rant') {
+                    c.rantTimer--;
+                    if (c.rantTimer <= 0) {
+                        c.state = c.investigating ? 'investigate' : 'patrol';
+                    }
+                    checkJanitorVision(c);
+                    continue;
+                }
+
+                // Determine movement speed based on state
+                const speed = c.state === 'chase' ? c.chaseSpeed : (30 + c.patrolSpeedMod);
+
+                if (c.timer % speed === 0) {
+                    if (c.state === 'chase') {
+                        // Chase: move toward player's CURRENT position
+                        const dist = Math.abs(c.x - game.player.x) + Math.abs(c.y - game.player.y);
+                        moveCrewToward(c, game.player.x, game.player.y);
+
+                        // If adjacent, DETAIN
+                        if (dist <= 1) {
+                            const msgs = [
+                                "🧹 Janitor Bob: 'AH-HA! Form 27-B/6, INCOMING!'",
+                                "🧹 Janitor Bob: 'GOTCHA! You're going in the INCIDENT LOG!'",
+                                "🧹 Janitor Bob body-slams you with a mop. It's super effective.",
+                            ];
+                            detain(msgs[Math.floor(Math.random() * msgs.length)]);
+                            c.suspicion = Math.max(0, c.suspicion - 2);
+                            c.investigating = null;
+                            c.state = 'patrol';
+                            return;
+                        }
+
+                        // Lost sight? Go to investigate
+                        if (!hasLineOfSight(c.x, c.y, game.player.x, game.player.y)) {
+                            c.state = 'investigate';
+                            c.investigating = { x: game.player.x, y: game.player.y };
+                            log(`🧹 Bob: "Where'd it go?! I KNOW you're here!"`);
+                        }
+
+                    } else if (c.state === 'investigate') {
+                        if (c.investigating) {
+                            moveCrewToward(c, c.investigating.x, c.investigating.y);
+                            if (c.x === c.investigating.x && c.y === c.investigating.y) {
+                                const lines = [
+                                    '🧹 Bob: "Hmm... fur. Suspicious. Filing Form 14-C."',
+                                    '🧹 Bob: "Scratch marks. Claw prints. *sniff* ...cheese?"',
+                                    '🧹 Bob: "I SMELL raccoon. The mop never lies."',
+                                ];
+                                log(lines[Math.floor(Math.random() * lines.length)]);
+                                c.investigating = null;
+                                c.state = 'patrol';
+                                // Random rant after investigating
+                                if (Math.random() < 0.3) {
+                                    c.state = 'rant';
+                                    c.rantTimer = 90;
+                                    log(`🧹 Bob: ${c.rantLines[Math.floor(Math.random() * c.rantLines.length)]}`);
+                                }
+                            }
+                        } else {
+                            c.state = 'patrol';
+                        }
+
+                    } else {
+                        // PATROL state
+                        const target = c.path[c.pi];
+                        if (c.x === target.x && c.y === target.y) {
+                            c.pi = (c.pi + 1) % c.path.length;
+                            // Sometimes mop at waypoints
+                            if (Math.random() < 0.35) {
+                                c.state = 'mop';
+                                c.mopping = 60 + Math.floor(Math.random() * 60);
+                                const mopLines = [
+                                    '🧹 Bob mops vigorously. *swish swish*',
+                                    '🧹 Bob scrubs the floor with existential intensity.',
+                                    '🧹 Bob: "This spot... it MOCKS me."',
+                                ];
+                                log(mopLines[Math.floor(Math.random() * mopLines.length)]);
+                            }
+                            // Sometimes rant at waypoints
+                            else if (Math.random() < 0.15) {
+                                c.state = 'rant';
+                                c.rantTimer = 120;
+                                log(`🧹 Bob: ${c.rantLines[Math.floor(Math.random() * c.rantLines.length)]}`);
+                            }
+                            // Randomize patrol speed slightly
+                            c.patrolSpeedMod = Math.floor(Math.random() * 10) - 5;
+                        }
+                        moveCrewToward(c, target.x, target.y);
+                    }
+                }
+
+                checkJanitorVision(c);
+            }
+        }
+
+        function checkJanitorVision(c) {
+            const dist = Math.abs(c.x - game.player.x) + Math.abs(c.y - game.player.y);
+            if (dist > c.visionRange) return;
+            if (!hasLineOfSight(c.x, c.y, game.player.x, game.player.y)) return;
+
+            c.suspicion++;
+            c.moodTimer = 600; // Reset cooldown when player spotted
+
+            if (c.state === 'patrol' || c.state === 'mop' || c.state === 'rant') {
+                // Spot player — switch to chase or investigate
+                if (dist <= 3) {
+                    c.state = 'chase';
+                    c.mopping = 0;
+                    c.rantTimer = 0;
+                    if (c.suspicion <= 2) {
+                        log(`🧹 Bob: "...did that trash just MOVE?!"`);
+                    } else if (c.suspicion <= 5) {
+                        log(`🧹 Bob: "YOU AGAIN! GET BACK HERE!"`);
+                    } else {
+                        log(`🔥 Bob: "THIS ENDS NOW! MOP JUSTICE!"`);
+                    }
+                } else {
+                    c.investigating = { x: game.player.x, y: game.player.y };
+                    if (c.state !== 'investigate') {
+                        c.state = 'investigate';
+                        log(`🧹 Bob squints into the darkness... "Something's out there."`);
+                    }
+                }
+            } else if (c.state === 'investigate') {
+                // Already investigating, upgrade to chase if close
+                if (dist <= 3) {
+                    c.state = 'chase';
+                    log(`🧹 Bob: "THERE! I SEE YOU, TRASH GREMLIN!"`);
+                }
+                c.investigating = { x: game.player.x, y: game.player.y };
+            }
+            // If already chasing, just update target (handled in movement)
+
+            // Proximity warnings
+            if (dist <= 2 && c.timer % 30 === 0) {
+                log(`⚠️ Bob is RIGHT THERE! ${dist} tile${dist > 1 ? 's' : ''} away!`);
+            }
+
+            // If adjacent, DETAIN immediately
+            if (dist <= 1) {
+                detain("🧹 Bob lunges! 'FORM 27-B/6! YOU'RE DONE!' You are detained.");
+                c.suspicion = Math.max(0, c.suspicion - 2);
+                c.investigating = null;
+                c.state = 'patrol';
+            }
+        }
+
+        function hasLineOfSight(x1, y1, x2, y2) {
+            const dx = Math.abs(x2 - x1), dy = Math.abs(y2 - y1);
+            const sx = x1 < x2 ? 1 : -1, sy = y1 < y2 ? 1 : -1;
+            let err = dx - dy, x = x1, y = y1;
+            while (true) {
+                if (x === x2 && y === y2) return true;
+                if (isWall(x, y) && !(x === x1 && y === y1)) return false;
+                const e2 = 2 * err;
+                if (e2 > -dy) { err -= dy; x += sx; }
+                if (e2 < dx) { err += dx; y += sy; }
+            }
+        }
+
+
+
+        // ---------- RACCOONLINGS ----------
+        function updateRaccoonlings() {
+            for (const k of game.raccoonlings) {
+                if (k.carried || k.rescued) continue; // Skip carried/rescued kits
+                k.t++;
+                if (k.t % 60 !== 0) continue;
+                if (k.name === 'Chonk') {
+                    // Eats stolen materials occasionally
+                    if (Math.random() < 0.1 && game.fruit > 0) {
+                        game.fruit--; k.ate++;
+                        log(`🍔 Chonk ate a fruit. He is now slightly bigger. (ate: ${k.ate})`);
+                    }
+                } else if (k.name === 'Greg') {
+                    // Wanders toward Bob's mop closet
+                    if (Math.random() < 0.2 && k.home) {
+                        k.home = false;
+                        log("🦝 Greg has left the den. Greg wanders toward Bob's mop closet. Greg is Greg.");
+                    }
+                    if (!k.home) {
+                        // Wander toward janitor's patrol area
+                        const bob = game.crew[0];
+                        const tx = bob ? bob.x : 8;
+                        const ty = bob ? bob.y : 8;
+                        const dx = Math.sign(tx - k.x);
+                        const dy = Math.sign(ty - k.y);
+                        if (Math.random() < 0.5 && !isWall(k.x + dx, k.y)) k.x += dx;
+                        else if (!isWall(k.x, k.y + dy)) k.y += dy;
+                        // Bob catches Greg
+                        for (const c of game.crew) {
+                            if (Math.abs(c.x - k.x) + Math.abs(c.y - k.y) <= 1) {
+                                log("🚨 GREG HAS BEEN CAUGHT. Bob files him under 'biohazard, furry'.");
+                                k.captured = true;
+                            }
+                        }
+                    }
+                } else if (k.name === 'The Quiet One') {
+                    // Teleports randomly
+                    if (Math.random() < 0.05) {
+                        const nx = k.x + (Math.floor(Math.random() * 3) - 1);
+                        const ny = k.y + (Math.floor(Math.random() * 3) - 1);
+                        if (!isWall(nx, ny)) { k.x = nx; k.y = ny; }
+                    }
+                }
+            }
+            // Update kits-home count
+            const homeCount = game.raccoonlings.filter(k => !k.captured && isDenNearby(k.x, k.y)).length;
+            game.kitsHome = homeCount;
+        }
+
+        function isDenNearby(x, y) {
+            for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+                if (isDen(x + dx, y + dy)) return true;
+            }
+            return false;
+        }
+
+        // ---------- DETENTION ----------
+        function detain(msg) {
+            if (game.player.caught) return;
+            game.player.caught = true;
+            game.paused = true;
+            log("🚔 " + msg);
+            showFormPuzzle();
+        }
+
+        const FORM_QUESTIONS = [
+            { q: "Are you, or have you ever been, a raccoon?", a: ["Yes", "No", "Define raccoon"], correct: 2 },
+            { q: "Do you have a permit for your tail?", a: ["Yes (lying)", "No", "I have several tails"], correct: 0 },
+            { q: "In the event of your death, who inherits your trash?", a: ["Greg", "The Cat", "Trashworld-7"], correct: 2 },
+            { q: "Has your tail ever expressed political opinions?", a: ["No", "Constantly", "Refuse to answer"], correct: 2 },
+            { q: "Please initial here, here, and on...?", a: ["The moon", "The form", "Your forehead"], correct: 0 },
+        ];
+
+        function showFormPuzzle() {
+            const overlay = document.getElementById('overlay');
+            const content = document.getElementById('overlay-content');
+            const q = FORM_QUESTIONS[Math.floor(Math.random() * FORM_QUESTIONS.length)];
+            content.innerHTML = `
+    <h2>📋 Form 27-B/6</h2>
+    <p style="color:#ff8;">Unauthorized Fauna Complaint</p>
+    <p><strong>${q.q}</strong></p>
+    ${q.a.map((a, i) => `<button onclick="answerForm(${i},${q.correct})">${a}</button>`).join('')}
+    <p style="font-size:10px;color:#888;margin-top:15px;">Wrong answers generate MORE FORMS. Confuse the bureaucracy to escape.</p>
+  `;
+            overlay.style.display = 'flex';
+        }
+
+        window.answerForm = function (picked, correct) {
+            if (picked === correct) {
+                log("📋 Your nonsensical answer confused HR. You slip out during a coffee break.");
+                document.getElementById('overlay').style.display = 'none';
+                game.paused = false;
+                game.player.caught = false;
+                game.player.x = 11; game.player.y = 12;
+                game.player.catSeen = 0;
+                // Drop carried kit back near den
+                if (game.player.carriedKit) {
+                    const kit = game.player.carriedKit;
+                    kit.carried = false;
+                    kit.x = 3; kit.y = 12;
+                    game.player.carriedKit = null;
+                    log(`🦝 ${kit.name} scurried back to the den during the chaos!`);
+                }
+                // Penalty
+                game.isk = Math.max(0, game.isk - 10);
+            } else {
+                log("📋 INCORRECT. New form generated. *sigh*");
+                showFormPuzzle();
+            }
+        };
+        // ---------- DRAWING ----------
+        function drawTile(x, y, t) {
+            const px = x * TILE, py = y * TILE;
+            if (t === '1') {
+                // Wall - metallic ship hull
+                ctx.fillStyle = '#3a3a5e';
+                ctx.fillRect(px, py, TILE, TILE);
+                ctx.fillStyle = '#5a5a8e';
+                ctx.fillRect(px + 2, py + 2, TILE - 4, 4);
+                ctx.fillRect(px + 2, py + TILE - 6, TILE - 4, 4);
+                ctx.fillStyle = '#1a1a3e';
+                ctx.fillRect(px, py + TILE - 2, TILE, 2);
+            } else if (t === '2') {
+                // Den - cozy hole
+                ctx.fillStyle = '#2a1a0a';
+                ctx.fillRect(px, py, TILE, TILE);
+                ctx.fillStyle = '#4a2a0a';
+                ctx.fillRect(px + 4, py + 4, TILE - 8, TILE - 8);
+                ctx.fillStyle = '#6a4a2a';
+                ctx.fillRect(px + 8, py + 8, 4, 4);
+                ctx.fillRect(px + TILE - 12, py + TILE - 12, 4, 4);
+            } else if (t === '3') {
+                // Escape pod - blinking red
+                const pulse = Math.sin(Date.now() / 200) * 0.5 + 0.5;
+                ctx.fillStyle = `rgb(${150 + pulse * 100},20,20)`;
+                ctx.fillRect(px, py, TILE, TILE);
+                ctx.fillStyle = '#ff0';
+                ctx.fillRect(px + 12, py + 12, 8, 8);
+                ctx.fillStyle = '#fff';
+                ctx.font = '8px monospace';
+                ctx.fillText('POD', px + 8, py + 28);
+            } else if (t === '4') {
+                // Fermentation corner - bubbly purple
+                ctx.fillStyle = '#2a0a3a';
+                ctx.fillRect(px, py, TILE, TILE);
+                const bubbleY = (Date.now() / 100) % TILE;
+                ctx.fillStyle = '#a04acf';
+                ctx.fillRect(px + 6, py + TILE - bubbleY, 4, 4);
+                ctx.fillRect(px + 18, py + TILE - ((bubbleY + 10) % TILE), 4, 4);
+                ctx.fillRect(px + 12, py + TILE - ((bubbleY + 20) % TILE), 3, 3);
+            } else {
+                // Floor
+                ctx.fillStyle = '#1a1a2e';
+                ctx.fillRect(px, py, TILE, TILE);
+                if ((x + y) % 2 === 0) {
+                    ctx.fillStyle = '#22223e';
+                    ctx.fillRect(px, py, TILE, TILE);
+                }
+                ctx.strokeStyle = '#0a0a1a';
+                ctx.strokeRect(px, py, TILE, TILE);
+            }
+        }
+
+        function drawRaccoon(px, py, color = '#888', secondary = '#444', mask = true) {
+            // Body
+            ctx.fillStyle = color;
+            ctx.fillRect(px + 6, py + 10, 20, 16);
+            // Head
+            ctx.fillStyle = color;
+            ctx.fillRect(px + 8, py + 4, 16, 12);
+            // Ears
+            ctx.fillStyle = secondary;
+            ctx.fillRect(px + 8, py + 2, 4, 4);
+            ctx.fillRect(px + 20, py + 2, 4, 4);
+            // Mask
+            if (mask) {
+                ctx.fillStyle = '#000';
+                ctx.fillRect(px + 9, py + 8, 14, 4);
+            }
+            // Eyes
+            ctx.fillStyle = '#fff';
+            ctx.fillRect(px + 11, py + 9, 2, 2);
+            ctx.fillRect(px + 19, py + 9, 2, 2);
+            // Snout
+            ctx.fillStyle = '#fff';
+            ctx.fillRect(px + 14, py + 13, 4, 2);
+            ctx.fillStyle = '#000';
+            ctx.fillRect(px + 15, py + 14, 2, 1);
+            // Tail (striped)
+            ctx.fillStyle = secondary;
+            ctx.fillRect(px + 2, py + 14, 6, 4);
+            ctx.fillStyle = color;
+            ctx.fillRect(px + 0, py + 18, 4, 4);
+            ctx.fillStyle = secondary;
+            ctx.fillRect(px + 0, py + 22, 4, 3);
+            // Feet
+            ctx.fillStyle = secondary;
+            ctx.fillRect(px + 8, py + 26, 4, 3);
+            ctx.fillRect(px + 20, py + 26, 4, 3);
+        }
+
+        function drawPlayer() {
+            const px = game.player.x * TILE, py = game.player.y * TILE;
+            // Drunk wobble
+            let ox = 0, oy = 0;
+            if (game.player.drunk > 0) {
+                ox = Math.sin(Date.now() / 80) * 2;
+                oy = Math.cos(Date.now() / 100) * 1;
+            }
+            // Lavender raccoon (purple-ish)
+            drawRaccoon(px + ox, py + oy, '#b48cff', '#6a3aaf');
+            // Carrying part?
+            if (game.player.carrying === 'part') {
+                ctx.fillStyle = '#aaa';
+                ctx.fillRect(px + 12, py - 4, 8, 6);
+                ctx.fillStyle = '#ff0';
+                ctx.fillRect(px + 14, py - 2, 2, 2);
+            }
+            // Carrying raccoonling?
+            if (game.player.carriedKit) {
+                const k = game.player.carriedKit;
+                ctx.fillStyle = k.color;
+                ctx.fillRect(px + 20 + ox, py + 2 + oy, 8, 6);
+                ctx.fillStyle = '#000';
+                ctx.fillRect(px + 21 + ox, py + 4 + oy, 2, 1);
+                ctx.fillRect(px + 25 + ox, py + 4 + oy, 2, 1);
+                ctx.fillStyle = '#fff';
+                ctx.font = '7px monospace';
+                ctx.fillText(k.name.substring(0, 5), px + 16, py - 4);
+            }
+        }
+
+
+
+        function drawJanitor(c) {
+            const px = c.x * TILE, py = c.y * TILE;
+
+            // Draw trash piles (wet floor zones)
+            for (const tp of c.trashPiles) {
+                const tpx = tp.x * TILE, tpy = tp.y * TILE;
+                const alpha = Math.min(1, tp.life / 300) * 0.4;
+                ctx.fillStyle = `rgba(100,200,255,${alpha})`;
+                ctx.fillRect(tpx + 4, tpy + 20, 24, 8);
+                ctx.fillStyle = `rgba(150,230,255,${alpha})`;
+                ctx.fillRect(tpx + 8, tpy + 22, 16, 4);
+                ctx.fillStyle = `rgba(255,255,100,${alpha + 0.1})`;
+                ctx.font = '8px monospace';
+                ctx.fillText('⚠', tpx + 12, tpy + 18);
+            }
+
+            // Vision cone — mood-dependent color
+            let visColor;
+            if (c.mood === 'furious') visColor = 'rgba(255,50,50,0.15)';
+            else if (c.mood === 'annoyed') visColor = 'rgba(255,150,50,0.12)';
+            else visColor = c.suspicion > 0 ? 'rgba(255,100,100,0.10)' : 'rgba(255,255,100,0.06)';
+            ctx.fillStyle = visColor;
+            ctx.beginPath();
+            ctx.arc(px + 16, py + 16, c.visionRange * TILE, 0, Math.PI * 2);
+            ctx.fill();
+
+            // Body — jumpsuit color changes with mood
+            const bodyColor = c.mood === 'furious' ? '#8a3a3a' : c.mood === 'annoyed' ? '#7a5a4a' : '#6a6a6a';
+            ctx.fillStyle = bodyColor;
+            ctx.fillRect(px + 8, py + 12, 16, 16);
+            // Belt
+            ctx.fillStyle = '#3a3a3a';
+            ctx.fillRect(px + 8, py + 18, 16, 2);
+            // Head
+            ctx.fillStyle = c.mood === 'furious' ? '#e48060' : '#d4a070';
+            ctx.fillRect(px + 10, py + 4, 12, 10);
+            // Bald spot / hair
+            ctx.fillStyle = '#3a2a1a';
+            ctx.fillRect(px + 10, py + 3, 12, 2);
+            ctx.fillStyle = c.mood === 'furious' ? '#e48060' : '#d4a070';
+            ctx.fillRect(px + 13, py + 4, 6, 1);
+            // Eyes — wider when furious
+            ctx.fillStyle = c.mood === 'furious' ? '#f00' : '#000';
+            const eyeH = c.mood === 'furious' ? 2 : 1;
+            ctx.fillRect(px + 13, py + 9, 2, eyeH);
+            ctx.fillRect(px + 18, py + 9, 2, eyeH);
+            // Eye bags
+            ctx.fillStyle = '#5a3a2a';
+            ctx.fillRect(px + 13, py + 10 + (eyeH - 1), 2, 1);
+            ctx.fillRect(px + 18, py + 10 + (eyeH - 1), 2, 1);
+            // Mustache
+            ctx.fillStyle = '#3a2a1a';
+            ctx.fillRect(px + 13, py + 12, 6, 1);
+            // MOP — glows when furious
+            ctx.fillStyle = c.mood === 'furious' ? '#ffa040' : '#8a6a3a';
+            ctx.fillRect(px + 2, py + 6, 2, 22); // handle
+            ctx.fillStyle = c.mood === 'furious' ? '#ffdd80' : '#e0e0c0';
+            ctx.fillRect(px - 1, py + 24, 8, 5); // mop head
+            ctx.fillStyle = '#a0a080';
+            ctx.fillRect(px, py + 26, 6, 1);
+            ctx.fillRect(px + 1, py + 28, 4, 1);
+
+            // State indicator above head
+            if (c.state === 'chase') {
+                ctx.fillStyle = '#f00';
+                ctx.font = 'bold 14px monospace';
+                ctx.fillText('!!', px + 18, py - 2);
+            } else if (c.suspicion > 0) {
+                const qs = c.suspicion >= 6 ? '???' : c.suspicion >= 3 ? '??' : '?';
+                ctx.fillStyle = c.mood === 'furious' ? '#f44' : '#ff0';
+                ctx.font = 'bold 12px monospace';
+                ctx.fillText(qs, px + 20, py + 2);
+            }
+
+            // Investigation line
+            if (c.investigating) {
+                ctx.strokeStyle = c.state === 'chase' ? 'rgba(255,80,80,0.4)' : 'rgba(255,200,0,0.3)';
+                ctx.setLineDash([4, 4]);
+                ctx.lineWidth = c.state === 'chase' ? 2 : 1;
+                ctx.beginPath();
+                ctx.moveTo(px + 16, py + 16);
+                ctx.lineTo(c.investigating.x * TILE + 16, c.investigating.y * TILE + 16);
+                ctx.stroke();
+                ctx.setLineDash([]);
+                ctx.lineWidth = 1;
+                // Mark spot
+                ctx.fillStyle = c.state === 'chase' ? '#f44' : '#ff0';
+                ctx.font = 'bold 12px monospace';
+                ctx.fillText('X', c.investigating.x * TILE + 12, c.investigating.y * TILE + 20);
+            }
+
+            // Mopping animation
+            if (c.state === 'mop') {
+                ctx.fillStyle = '#fff';
+                ctx.font = '10px monospace';
+                const swish = (Math.floor(c.timer / 8) % 2) ? '~' : '≈';
+                ctx.fillText(swish, px - 4, py - 2);
+                ctx.fillText(swish, px + 26, py - 2);
+            }
+
+            // Rant animation — speech bubble
+            if (c.state === 'rant') {
+                ctx.fillStyle = 'rgba(255,255,255,0.9)';
+                ctx.fillRect(px + 20, py - 12, 16, 10);
+                ctx.fillStyle = '#000';
+                ctx.font = '8px monospace';
+                ctx.fillText('💢', px + 22, py - 4);
+            }
+
+            // Mood label
+            if (c.mood !== 'calm') {
+                ctx.fillStyle = c.mood === 'furious' ? '#f44' : '#fa0';
+                ctx.font = 'bold 7px monospace';
+                ctx.fillText(c.mood.toUpperCase(), px + 4, py + 32);
+            }
+        }
+
+        function drawCat(c) {
+            const px = c.x * TILE, py = c.y * TILE;
+            // Body
+            ctx.fillStyle = '#1a1a1a';
+            ctx.fillRect(px + 6, py + 14, 20, 12);
+            // Head
+            ctx.fillStyle = '#1a1a1a';
+            ctx.fillRect(px + 8, py + 6, 16, 10);
+            // Ears (pointy)
+            ctx.fillRect(px + 7, py + 3, 4, 4);
+            ctx.fillRect(px + 21, py + 3, 4, 4);
+            // Eyes - GLOWING
+            ctx.fillStyle = c.staring > 0 ? '#f00' : '#0f0';
+            ctx.fillRect(px + 11, py + 9, 2, 2);
+            ctx.fillRect(px + 19, py + 9, 2, 2);
+            // Nose
+            ctx.fillStyle = '#f8a';
+            ctx.fillRect(px + 15, py + 12, 2, 2);
+            // Tail (long)
+            ctx.fillStyle = '#1a1a1a';
+            ctx.fillRect(px + 24, py + 10, 6, 3);
+            ctx.fillRect(px + 27, py + 6, 3, 6);
+            // Legs
+            ctx.fillRect(px + 8, py + 26, 3, 3);
+            ctx.fillRect(px + 21, py + 26, 3, 3);
+            // Detection alert
+            if (game.player.catSeen > 0) {
+                ctx.fillStyle = '#f00';
+                ctx.font = 'bold 14px monospace';
+                ctx.fillText('!', px + 14, py - 2);
+            }
+        }
+
+        function drawItem(it) {
+            if (it.taken) return;
+            const px = it.x * TILE, py = it.y * TILE;
+            const bob = Math.sin(Date.now() / 300 + it.x) * 2;
+            if (it.t === 'isk') {
+                // Wallet/credit chip
+                ctx.fillStyle = '#0a0';
+                ctx.fillRect(px + 8, py + 10 + bob, 16, 12);
+                ctx.fillStyle = '#0f0';
+                ctx.fillRect(px + 10, py + 12 + bob, 12, 2);
+                ctx.fillStyle = '#ff0';
+                ctx.font = 'bold 8px monospace';
+                ctx.fillText('$', px + 14, py + 20 + bob);
+            } else if (it.t === 'orange') {
+                ctx.fillStyle = '#f80';
+                ctx.beginPath();
+                ctx.arc(px + 16, py + 16 + bob, 7, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.fillStyle = '#0a4';
+                ctx.fillRect(px + 15, py + 8 + bob, 2, 3);
+            } else if (it.t === 'grape') {
+                ctx.fillStyle = '#80f';
+                for (const [dx, dy] of [[0, 0], [4, 0], [2, 3], [-2, 3], [6, 3], [0, 6], [4, 6]]) {
+                    ctx.beginPath();
+                    ctx.arc(px + 14 + dx, py + 12 + dy + bob, 3, 0, Math.PI * 2);
+                    ctx.fill();
+                }
+                ctx.fillStyle = '#0a4';
+                ctx.fillRect(px + 15, py + 8 + bob, 2, 2);
+            } else if (it.t === 'part') {
+                // Random "ship part"
+                ctx.fillStyle = '#aaa';
+                ctx.fillRect(px + 8, py + 10 + bob, 16, 12);
+                ctx.fillStyle = '#666';
+                ctx.fillRect(px + 10, py + 12 + bob, 4, 4);
+                ctx.fillRect(px + 18, py + 12 + bob, 4, 4);
+                ctx.fillStyle = '#ff0';
+                ctx.fillRect(px + 14, py + 18 + bob, 4, 2);
+            }
+        }
+
+        function drawRaccoonling(k) {
+            if (k.carried || k.rescued) return; // Skip carried/rescued
+            const px = k.x * TILE, py = k.y * TILE;
+            if (k.captured) {
+                ctx.fillStyle = 'rgba(255,0,0,0.3)';
+                ctx.fillRect(px, py, TILE, TILE);
+                ctx.fillStyle = '#f00';
+                ctx.font = '10px monospace';
+                ctx.fillText('🚔', px + 10, py + 18);
+                return;
+            }
+            // Smaller raccoon
+            ctx.fillStyle = k.color;
+            ctx.fillRect(px + 10, py + 14, 12, 10);
+            ctx.fillStyle = k.color;
+            ctx.fillRect(px + 12, py + 8, 8, 8);
+            // Mask
+            ctx.fillStyle = '#000';
+            ctx.fillRect(px + 13, py + 11, 6, 2);
+            // Eyes
+            ctx.fillStyle = '#fff';
+            ctx.fillRect(px + 13, py + 12, 1, 1);
+            ctx.fillRect(px + 18, py + 12, 1, 1);
+            // Tiny tail
+            ctx.fillStyle = '#444';
+            ctx.fillRect(px + 8, py + 16, 3, 3);
+            // Name label
+            ctx.fillStyle = '#fff';
+            ctx.font = '7px monospace';
+            ctx.fillText(k.name.substring(0, 8), px - 2, py + 30);
+        }
+
+        function drawHUD() {
+            document.getElementById('hud-isk').textContent = `💰 ISK: ${game.isk}/100`;
+            document.getElementById('hud-parts').textContent = `🔧 Parts: ${game.parts}/3`;
+            document.getElementById('hud-fruit').textContent = `🍊 Fruit: ${game.fruit} | 🍷 Hooch: ${game.hooch}`;
+            let drunkText = '😎 Sober';
+            if (game.player.drunk > 120) drunkText = '🥴 SLOSHED';
+            else if (game.player.drunk > 0) drunkText = '😵 Tipsy';
+            document.getElementById('hud-drunk').textContent = drunkText;
+            document.getElementById('hud-hooch-count').textContent = `🍺 Drinks: ${game.drunkCount}/4`;
+            let kitText = `🦝 Kits: ${game.kitsAtPod}/3 at Pod`;
+            if (game.player.carriedKit) kitText += ` [📦${game.player.carriedKit.name}]`;
+            document.getElementById('hud-kits').textContent = kitText;
+        }
+
+        // ---------- LOG ----------
+        function log(msg) {
+            const el = document.getElementById('log');
+            const line = document.createElement('div');
+            line.textContent = '> ' + msg;
+            el.appendChild(line);
+            el.scrollTop = el.scrollHeight;
+            while (el.children.length > 50) el.removeChild(el.firstChild);
+        }
+
+        // ---------- TICKER ----------
+        function rotateTicker() {
+            const msgs = game.tickerMessages;
+            let i = 0;
+            setInterval(() => {
+                i = (i + 1) % msgs.length;
+                document.getElementById('ticker-text').textContent =
+                    `📡 GALACTIC NEWS: ${msgs[i]}   ///   ISK trend: ${game.iskTrend >= 0 ? '↑' : '↓'}${Math.abs(game.iskTrend)}   ///   `;
+            }, 5000);
+        }
+
+        // ---------- WIN / LOSE ----------
+        function winGame() {
+            game.won = true;
+            game.paused = true;
+            const overlay = document.getElementById('overlay');
+            const content = document.getElementById('overlay-content');
+            const rescued = game.kitsAtPod;
+            const failures = [
+                "The microwave-engine works! For 4 seconds!",
+                "Kevin the houseplant did NOT survive re-entry. RIP Kevin.",
+                `Lavender drank ${game.drunkCount} Space Hooches. She regrets nothing.`,
+                "The sticky juice box held. Against all odds.",
+                "You crash-land on Trashworld-7 directly into a pile of trash. You are home.",
+            ];
+            content.innerHTML = `
+    <h2>🚀 ESCAPE!</h2>
+    <p>Lavender Princess fires up the microwave-engine...</p>
+    ${failures.map(f => `<p>• ${f}</p>`).join('')}
+    <p style="color:#ff8;margin-top:10px;">🦝 Raccoonlings aboard: ${rescued}/3</p>
+    <p style="color:#ff8;">🍺 Drinks consumed: ${game.drunkCount}</p>
+    <p style="color:#0f0;font-size:18px;margin-top:10px;">YOU WIN!</p>
+    <p style="font-size:11px;color:#888;">Janitor Bob, three weeks later: "I KNEW it was raccoons. Nobody believed me. NOBODY."</p>
+    <button onclick="location.reload()">Play Again</button>
+  `;
+            overlay.style.display = 'flex';
+        }
+
+        // ---------- MAIN LOOP ----------
+        function update() {
+            if (game.paused) return;
+
+            // Drunk timer
+            if (game.player.drunk > 0) game.player.drunk--;
+
+            // Cat-seen timer countdown happens in updateCat
+
+            // Fermentation
+            if (game.fermentTimer > 0 && game.fermenting > 0) {
+                game.fermentTimer--;
+                if (game.fermentTimer === 0) {
+                    game.hooch += game.fermenting;
+                    log(`🍷 Fermentation complete! +${game.fermenting} Space Hooch. Press F to drink. (Total hooch: ${game.hooch})`);
+                    game.fermenting = 0;
+                }
+            }
+
+            // Item respawn (ISK and fruit only - keeps the heist going)
+            for (const it of game.items) {
+                if (it.taken && it.t !== 'part' && it.respawnTimer > 0) {
+                    it.respawnTimer--;
+                    if (it.respawnTimer === 0) {
+                        it.taken = false;
+                    }
+                }
+            }
+
+            // ISK market chaos
+            if (Math.random() < 0.005) {
+                game.iskTrend += Math.floor(Math.random() * 20 - 10);
+            }
+
+            updatePlayer();
+            updateCrew();
+            updateRaccoonlings();
+        }
+
+        function draw() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            // Map
+            for (let y = 0; y < ROWS; y++)
+                for (let x = 0; x < COLS; x++)
+                    drawTile(x, y, MAP[y][x]);
+
+            // Items
+            for (const it of game.items) drawItem(it);
+
+            // Raccoonlings
+            for (const k of game.raccoonlings) drawRaccoonling(k);
+
+            // Crew
+            for (const c of game.crew) {
+                drawJanitor(c);
+            }
+
+
+
+            // Player (last, on top)
+            drawPlayer();
+
+            // Fermentation indicator
+            if (game.fermentTimer > 0 && game.fermenting > 0) {
+                ctx.fillStyle = '#d4a4ff';
+                ctx.font = 'bold 11px monospace';
+                ctx.fillText(`🍷 Fermenting ${game.fermenting} fruit: ${(game.fermentTimer / 60).toFixed(1)}s`, 10, 472);
+            }
+
+            drawHUD();
+        }
+
+        function loop() {
+            update();
+            draw();
+            requestAnimationFrame(loop);
+        }
+
+        // ---------- BOOT ----------
+        function init() {
+            spawnItems();
+            spawnCrew();
+            spawnRaccoonlings();
+            rotateTicker();
+            log("🦝 You wake up in a crate of Artisanal Moon Cheese. You have... children? OK.");
+            log("🎯 Goal: 100 ISK + 3 parts + 4 drinks + carry all 3 kits to the POD. Then escape!");
+            log("💡 Press E on a kit to pick them up. Carry them to the red POD tile and press E.");
+            log("🍺 Ferment fruit into hooch (purple tile + Q), then drink 4 times (F) for liquid courage.");
+            loop();
+        }
+        init();
+    </script>
+</body>
+
+</html>
